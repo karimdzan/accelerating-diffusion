@@ -16,6 +16,7 @@ from diffusers import (
     StableDiffusionXLPipeline,
     UNet2DConditionModel,
     LCMScheduler,
+    DiffusionPipeline,
 )
 from diffusers.models.attention_processor import AttnProcessor2_0
 
@@ -69,7 +70,7 @@ def init_pipeline(dtype, device):
     unet = UNet2DConditionModel.from_pretrained(
         "latent-consistency/lcm-sdxl", torch_dtype=dtype, variant="fp16"
     )
-    pipe = StableDiffusionXLPipeline.from_pretrained(
+    pipe = DiffusionPipeline.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0",
         unet=unet,
         torch_dtype=dtype,

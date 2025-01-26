@@ -1,0 +1,1 @@
+python3 generate_images.py --index 3 --batch_size 8 --sample_size 8  --output_dir "generated_images_8"
