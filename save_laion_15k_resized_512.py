@@ -5,11 +5,11 @@ import random
 from tqdm import tqdm
 import gc
 
-dataset_path = "laion_improved_aesthetics_6.5plus_with_images"
+dataset_path = "../laion_improved_aesthetics_6.5plus_with_images"
 dataset = load_from_disk(dataset_path)
 train_dataset = dataset["train"]
 
-sample_size = 15000
+sample_size = 20000
 random_indices = random.sample(range(len(train_dataset)), sample_size)
 sampled_dataset = train_dataset.select(random_indices)
 
@@ -34,7 +34,7 @@ gc.collect()
 
 resized_dataset = Dataset.from_list(resized_samples)
 
-output_path = "./resized_laion_512x512"
+output_path = "../resized_laion_512x512"
 resized_dataset.save_to_disk(output_path)
 
 print("Saved")

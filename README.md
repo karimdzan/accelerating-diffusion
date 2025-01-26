@@ -1,1 +1,1 @@
-# Latent Diffusion Model Implementation
+# Diffusion Acceleration Methods Research
