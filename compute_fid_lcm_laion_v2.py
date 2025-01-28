@@ -7,10 +7,12 @@ import torch
 import torchvision.transforms as T
 from PIL import Image
 from tqdm import tqdm
-
+import json
 from datasets import load_from_disk
 from torchmetrics.functional.multimodal import clip_score
 from torchmetrics.image.fid import FrechetInceptionDistance
+from torchvision.transforms.functional import to_tensor, resize
+from multiprocessing import Pool
 
 from diffusers import (
     StableDiffusionXLPipeline,
@@ -19,9 +21,10 @@ from diffusers import (
     DiffusionPipeline,
 )
 from diffusers.models.attention_processor import AttnProcessor2_0
+import ImageReward as RM
 
-os.environ["PYTORCH_SDP_ENABLE_BACKWARD_OPTIMIZATION"] = "1"
 torch.backends.cudnn.benchmark = True
+torch.backends.cuda.matmul.allow_tf32 = True
 
 
 def parse_args():
@@ -66,21 +69,42 @@ def parse_args():
     return parser.parse_args()
 
 
+def preprocess_image(img, size=(512, 512), dtype=torch.float16):
+    img = resize(img, size)
+    img = to_tensor(img)
+    if dtype == torch.float16:
+        img = img.half()
+    return img
+
+
+def preprocess_batch_parallel(pil_images, num_workers=4):
+    with Pool(num_workers) as pool:
+        tensors = pool.map(preprocess_image, pil_images)
+    return torch.stack(tensors, dim=0)
+
+
 def init_pipeline(dtype, device):
-    unet = UNet2DConditionModel.from_pretrained(
-        "latent-consistency/lcm-sdxl", torch_dtype=dtype, variant="fp16"
-    )
+    # unet = UNet2DConditionModel.from_pretrained(
+    #     "latent-consistency/lcm-sdxl", torch_dtype=dtype, variant="fp16"
+    # )
+    # pipe = StableDiffusionXLPipeline.from_pretrained(
+    #     "stabilityai/stable-diffusion-xl-base-1.0",
+    #     unet=unet,
+    #     torch_dtype=dtype,
+    #     variant="fp16",
+    # ).to(device)
     pipe = DiffusionPipeline.from_pretrained(
-        "stabilityai/stable-diffusion-xl-base-1.0",
-        unet=unet,
-        torch_dtype=dtype,
-        variant="fp16",
+        "SimianLuo/LCM_Dreamshaper_v7", torch_dtype=dtype
     ).to(device)
+
+    # pipe.unet = torch.compile(pipe.unet, mode="max-autotune")
+
     pipe.scheduler = LCMScheduler.from_config(pipe.scheduler.config)
-    pipe.unet.set_attn_processor(AttnProcessor2_0())
-    pipe.safety_checker = None
-    pipe.image_processor.do_rescale = False
+
+    # pipe.unet.set_attn_processor(AttnProcessor2_0())
+
     pipe.set_progress_bar_config(disable=True)
+
     return pipe
 
 
@@ -192,8 +216,17 @@ def main():
 
     print("Loading pipeline...")
     pipe = init_pipeline(dtype, device)
+    print(
+        "Number of parameters:    ",
+        sum(p.numel() for p in pipe.unet.parameters() if p.requires_grad),
+    )
+
+    model = RM.load("ImageReward-v1.0")
+    pil_to_tensor = T.ToTensor()
 
     gen_images_list = []
+    image_reward_scores = []
+
     print("Generating images from text prompts...")
     N = len(prompts_list)
     for start_idx in tqdm(range(0, N, batch_size), desc="Generating images"):
@@ -205,21 +238,29 @@ def main():
                 prompt=batch_prompts,
                 num_inference_steps=num_inference_steps,
                 guidance_scale=8.0,
-                height=512,
+                height=512,  # This would yield bad results on sdxl
                 width=512,
-                num_images_per_prompt=1,
+                # lcm_origin_steps=50,
+                output_type="pil",
+                # num_images_per_prompt=1,
             ).images
 
-        batch_gen_tensors = []
-        for im in out_pil_images:
-            t = T.ToTensor()(im)
-            if dtype == torch.float16:
-                t = t.half()
-            batch_gen_tensors.append(t)
+            for prompt, img in zip(batch_prompts, out_pil_images):
+                score = model.score(prompt, img)
+                image_reward_scores.append(score)
 
-        gen_images_list.extend(batch_gen_tensors)
-        del batch_gen_tensors, out_pil_images
+                gen_images_list.append(pil_to_tensor(img))
+
+        del out_pil_images
+        torch.cuda.empty_cache()
         gc.collect()
+
+    print("Calculating Image Reward Score...")
+    average_score = sum(image_reward_scores) / N
+    print(f"Average Image Reward Score:  {average_score}")
+
+    # print("Preprocessing generated images...")
+    # gen_images = preprocess_batch_parallel(gen_images_list, num_workers=4)
 
     gen_images = torch.stack(gen_images_list, dim=0)
     del gen_images_list

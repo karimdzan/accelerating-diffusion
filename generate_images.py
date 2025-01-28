@@ -4,6 +4,7 @@ import random
 import argparse
 import torch
 import torchvision.transforms as T
+from torchvision.utils import save_image
 from tqdm import tqdm
 from datasets import load_from_disk
 
@@ -15,8 +16,8 @@ from diffusers import (
 )
 from diffusers.models.attention_processor import AttnProcessor2_0
 
-os.environ["PYTORCH_SDP_ENABLE_BACKWARD_OPTIMIZATION"] = "1"
 torch.backends.cudnn.benchmark = True
+torch.backends.cuda.matmul.allow_tf32 = True
 
 
 def parse_args():
@@ -53,7 +54,6 @@ def parse_args():
         "--device",
         type=str,
         default="cuda",
-        choices=["cuda", "cpu"],
         help="Device to use for generation",
     )
     parser.add_argument(
@@ -69,20 +69,24 @@ def init_pipeline(dtype, device):
     # unet = UNet2DConditionModel.from_pretrained(
     #     "latent-consistency/lcm-sdxl", torch_dtype=dtype, variant="fp16"
     # )
-    # pipe = DiffusionPipeline.from_pretrained(
+    # pipe = StableDiffusionXLPipeline.from_pretrained(
     #     "stabilityai/stable-diffusion-xl-base-1.0",
     #     unet=unet,
     #     torch_dtype=dtype,
     #     variant="fp16",
     # ).to(device)
-    # pipe.scheduler = LCMScheduler.from_config(pipe.scheduler.config)
-    pipe = DiffusionPipeline.from_pretrained("SimianLuo/LCM_Dreamshaper_v7").to(
-        torch_device="cuda", torch_dtype=torch.float16
-    )
+    pipe = DiffusionPipeline.from_pretrained(
+        "SimianLuo/LCM_Dreamshaper_v7", torch_dtype=dtype
+    ).to(device)
+
+    # pipe.unet = torch.compile(pipe.unet, mode="max-autotune")
+
+    pipe.scheduler = LCMScheduler.from_config(pipe.scheduler.config)
+
     pipe.unet.set_attn_processor(AttnProcessor2_0())
-    pipe.safety_checker = None
-    pipe.image_processor.do_rescale = False
+
     pipe.set_progress_bar_config(disable=True)
+
     return pipe
 
 
@@ -135,7 +139,7 @@ def main():
                 guidance_scale=8.0,
                 height=512,
                 width=512,
-                num_images_per_prompt=1,
+                # num_images_per_prompt=1,
             ).images
 
         for idx, img in enumerate(out_pil_images):
