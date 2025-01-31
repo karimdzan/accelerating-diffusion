@@ -8,6 +8,7 @@ import torchvision.transforms as T
 from PIL import Image
 from tqdm import tqdm
 import json
+import numpy as np
 from datasets import load_from_disk
 from torchmetrics.functional.multimodal import clip_score
 from torchmetrics.image.fid import FrechetInceptionDistance
@@ -20,6 +21,9 @@ from diffusers import (
     LCMScheduler,
     DiffusionPipeline,
     StableDiffusionPipeline,
+    DPMSolverMultistepScheduler,
+    DPMSolverSinglestepScheduler,
+    DDIMScheduler,
 )
 from diffusers.models.attention_processor import AttnProcessor2_0
 import ImageReward as RM
@@ -74,10 +78,10 @@ def parse_args():
         help="Device to use for generation and metrics",
     )
     parser.add_argument(
-        "--index",
+        "--num_inference_steps",
         type=int,
-        default=2,
-        help="Exponent for num_inference_steps = 2**index",
+        default=4,
+        help="number of unet model evaluation steps to do per image",
     )
     return parser.parse_args()
 
@@ -113,9 +117,16 @@ def init_pipeline(model_id, adapter_id, dtype, device):
 
     pipe = DiffusionPipeline.from_pretrained(model_id, torch_dtype=dtype).to(device)
 
+    scheduler_config = pipe.scheduler.config
+
+    scheduler_config["final_sigmas_type"] = "sigma_min"
+    scheduler_config["algorithm_type"] = "dpmsolver"
+
+    pipe.scheduler = DPMSolverMultistepScheduler.from_config(scheduler_config)
+
     # pipe.unet = torch.compile(pipe.unet, mode="reduce-overhead")
 
-    pipe.scheduler = LCMScheduler.from_config(pipe.scheduler.config)
+    # pipe.scheduler = LCMScheduler.from_config(pipe.scheduler.config)
 
     # pipe.load_lora_weights(adapter_id)
     # pipe.fuse_lora()
@@ -200,6 +211,13 @@ def compute_fid_torchmetrics(
 
 
 def main():
+    seed = 42
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
     args = parse_args()
     model_id = args.model_id
     adapter_id = args.adapter_id
@@ -210,7 +228,7 @@ def main():
     device = args.device
     sample_size = args.sample_size
     batch_size = args.batch_size
-    num_inference_steps = 2**args.index
+    num_inference_steps = args.num_inference_steps
 
     print("Loading original LAION dataset...")
     dataset = load_from_disk(args.dataset_path)["train"]
@@ -238,6 +256,9 @@ def main():
 
     print("Loading pipeline...")
     pipe = init_pipeline(model_id, adapter_id, dtype, device)
+
+    pipe.scheduler.num_inference_steps = num_inference_steps
+
     print(
         "Number of parameters:    ",
         sum(p.numel() for p in pipe.unet.parameters() if p.requires_grad),
@@ -258,8 +279,8 @@ def main():
         with torch.inference_mode(), torch.no_grad():
             out_pil_images = pipe(
                 prompt=batch_prompts,
-                num_inference_steps=num_inference_steps,
-                guidance_scale=8.0,
+                # num_inference_steps=num_inference_steps,
+                # guidance_scale=3.5,
                 height=512,  # This would yield bad results on sdxl
                 width=512,
                 # lcm_origin_steps=50,

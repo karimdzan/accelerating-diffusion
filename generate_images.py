@@ -13,6 +13,10 @@ from diffusers import (
     UNet2DConditionModel,
     LCMScheduler,
     DiffusionPipeline,
+    StableDiffusionPipeline,
+    DPMSolverMultistepScheduler,
+    DPMSolverSinglestepScheduler,
+    DDIMScheduler,
 )
 from diffusers.models.attention_processor import AttnProcessor2_0
 
@@ -27,6 +31,18 @@ def parse_args():
         type=str,
         default="../laion_improved_aesthetics_6.5plus_with_images",
         help="Path to the LAION aesthetics dataset with images",
+    )
+    parser.add_argument(
+        "--model_id",
+        type=str,
+        default="SimianLuo/LCM_Dreamshaper_v7",
+        help="Huggingface Model ID. Default is `SimianLuo/LCM_Dreamshaper_v7`.",
+    )
+    parser.add_argument(
+        "--adapter_id",
+        type=str,
+        default="latent-consistency/lcm-lora-sdv1-5",
+        help="Huggingface Adapter ID. Default is `latent-consistency/lcm-lora-sdv1-5`.",
     )
     parser.add_argument(
         "--output_dir",
@@ -65,7 +81,7 @@ def parse_args():
     return parser.parse_args()
 
 
-def init_pipeline(dtype, device):
+def init_pipeline(model_id, adapter_id, dtype, device):
     # unet = UNet2DConditionModel.from_pretrained(
     #     "latent-consistency/lcm-sdxl", torch_dtype=dtype, variant="fp16"
     # )
@@ -75,23 +91,39 @@ def init_pipeline(dtype, device):
     #     torch_dtype=dtype,
     #     variant="fp16",
     # ).to(device)
-    pipe = DiffusionPipeline.from_pretrained(
-        "SimianLuo/LCM_Dreamshaper_v7", torch_dtype=dtype
-    ).to(device)
 
-    # pipe.unet = torch.compile(pipe.unet, mode="max-autotune")
+    # pipe = StableDiffusionPipeline.from_pretrained(
+    #     model_id, torch_dtype=dtype, variant="fp16"
+    # ).to(device)
 
-    pipe.scheduler = LCMScheduler.from_config(pipe.scheduler.config)
+    pipe = DiffusionPipeline.from_pretrained(model_id, torch_dtype=dtype).to(device)
+
+    scheduler_config = pipe.scheduler.config
+
+    scheduler_config["final_sigmas_type"] = "sigma_min"
+
+    pipe.scheduler = DPMSolverMultistepScheduler.from_config(scheduler_config)
+
+    # pipe.unet = torch.compile(pipe.unet, mode="reduce-overhead")
+
+    # pipe.scheduler = LCMScheduler.from_config(pipe.scheduler.config)
+
+    # pipe.load_lora_weights(adapter_id)
+    # pipe.fuse_lora()
 
     pipe.unet.set_attn_processor(AttnProcessor2_0())
 
     pipe.set_progress_bar_config(disable=True)
+    pipe.safety_checker = None
 
     return pipe
 
 
 def main():
     args = parse_args()
+    model_id = args.model_id
+    adapter_id = args.adapter_id
+
     if args.dtype == "float16":
         dtype = torch.float16
     else:
@@ -124,7 +156,10 @@ def main():
     gc.collect()
 
     print("Loading pipeline...")
-    pipe = init_pipeline(dtype, device)
+    pipe = init_pipeline(model_id, adapter_id, dtype, device)
+
+    pipe.scheduler.num_inference_steps = num_inference_steps
+    # pipe.scheduler.solver_order = 2
 
     print(f"Generating images for {sample_size} prompts...")
     N = len(prompts_list)
@@ -135,8 +170,8 @@ def main():
         with torch.inference_mode(), torch.no_grad():
             out_pil_images = pipe(
                 prompt=batch_prompts,
-                num_inference_steps=num_inference_steps,
-                guidance_scale=8.0,
+                # num_inference_steps=num_inference_steps,
+                # guidance_scale=0.0,
                 height=512,
                 width=512,
                 # num_images_per_prompt=1,
