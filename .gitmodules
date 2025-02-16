@@ -1,0 +1,3 @@
+[submodule "inversion_eval/invertible-cd"]
+	path = inversion_eval/invertible-cd
+	url = https://github.com/yandex-research/invertible-cd.git
