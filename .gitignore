@@ -1,8 +1,9 @@
 # Logging files
 *.out
 generated_images_*
-invertible-cd/
-
+# invertible-cd/
+checkpoints/
+assets/
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
