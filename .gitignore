@@ -1,6 +1,7 @@
 # Logging files
 *.out
 generated_images_*
+invertible-cd/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

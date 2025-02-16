@@ -101,30 +101,34 @@ def preprocess_batch_parallel(pil_images, num_workers=4):
 
 
 def init_pipeline(model_id, adapter_id, dtype, device):
+    generator = torch.Generator(device=device).manual_seed(42)
+
     # unet = UNet2DConditionModel.from_pretrained(
     #     "latent-consistency/lcm-sdxl", torch_dtype=dtype, variant="fp16"
     # )
     # pipe = StableDiffusionXLPipeline.from_pretrained(
     #     "stabilityai/stable-diffusion-xl-base-1.0",
     #     unet=unet,
+    #     generator=generator,
     #     torch_dtype=dtype,
     #     variant="fp16",
     # ).to(device)
 
     # pipe = StableDiffusionPipeline.from_pretrained(
-    #     model_id, torch_dtype=dtype, variant="fp16"
+    #     model_id, torch_dtype=dtype, generator=generator, variant="fp16"
     # ).to(device)
-
-    pipe = DiffusionPipeline.from_pretrained(model_id, torch_dtype=dtype).to(device)
+    pipe = StableDiffusionPipeline.from_pretrained(
+        model_id, torch_dtype=dtype, generator=generator, variant="fp16"
+    ).to(device)
 
     scheduler_config = pipe.scheduler.config
 
     scheduler_config["final_sigmas_type"] = "sigma_min"
-    scheduler_config["algorithm_type"] = "dpmsolver"
+    scheduler_config["algorithm_type"] = "dpmsolver++"
 
     pipe.scheduler = DPMSolverMultistepScheduler.from_config(scheduler_config)
 
-    # pipe.unet = torch.compile(pipe.unet, mode="reduce-overhead")
+    # pipe.unet = torch.compile(pipe.unet, mode="max-autotune")
 
     # pipe.scheduler = LCMScheduler.from_config(pipe.scheduler.config)
 
@@ -279,7 +283,7 @@ def main():
         with torch.inference_mode(), torch.no_grad():
             out_pil_images = pipe(
                 prompt=batch_prompts,
-                # num_inference_steps=num_inference_steps,
+                num_inference_steps=num_inference_steps,
                 # guidance_scale=3.5,
                 height=512,  # This would yield bad results on sdxl
                 width=512,
